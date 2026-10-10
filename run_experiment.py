@@ -18,6 +18,30 @@ ROLLBACK_TRIES = 3
 # Kill-switch proof: deliberately tiny thresholds, so the guard aborts within seconds of injection.
 FORCE_ABORT_TEST = False
 FORCE_THRESHOLDS = {"error_rate": 0.0, "p95_ms": 0.001}
+SOURCES = {"rank_agent": "RANK AGENT (LLM investigated the ranker's top candidates)",
+           "ranker_fallback": "RANKER #1 (LLM investigation not used)",
+           "fallback": "FALLBACK PLAN (ranking unavailable)"}
+
+
+def print_ranking(ranking):
+    """Ranked top-K table, then the chosen candidate's evidence and predictions."""
+    rows = ranking.get("top_k") or []
+    print(f"\nTop-{len(rows)} candidates (ranker score -> agent-adjusted):")
+    print(f"  {'':2}{'candidate':<34}{'risk':>6}{'info':>6}{'prio':>6}{'adj risk':>10}{'adj prio':>10}")
+    adj = lambda x: "-" if x is None else f"{x:.2f}"
+    for r in rows:
+        mark = "->" if r["candidate_id"] == ranking.get("chosen") else ""
+        print(f"  {mark:<2}{r['candidate_id']:<34}{r['risk']:>6.2f}{r['info']:>6.2f}{r['priority']:>6.2f}"
+              f"{adj(r['adjusted_risk']):>10}{adj(r['adjusted_priority']):>10}")
+        print(f"  {'':2}  why: {r['why']}")
+    chosen = next((r for r in rows if r["candidate_id"] == ranking.get("chosen")), None)
+    if chosen and chosen["evidence"]:
+        print(f"\nEvidence for {chosen['candidate_id']}:")
+        for e in chosen["evidence"]:
+            print(f"  - [{e['tool']}] {e['finding']}")
+    if ranking.get("predictions"):
+        print("Predictions: " + "; ".join(f"{p['svc']} {p['metric']} {p['direction']} (x{p['min_factor']})"
+                                          for p in ranking["predictions"]))
 
 
 def print_summary(plan, source, note, result):
@@ -26,7 +50,9 @@ def print_summary(plan, source, note, result):
     for k in ("target", "fault", "magnitude", "duration_s"):
         print(f"{k:>12}: {plan.get(k)}")
     print(f"{'hypothesis':>12}: {plan.get('hypothesis')}\n{'reasoning':>12}: {plan.get('reasoning')}")
-    print(f"\nSource: {'LLM' if source == 'llm' else 'FALLBACK PLAN (LLM not used)'} - {note}")
+    if plan.get("ranking"):
+        print_ranking(plan["ranking"])
+    print(f"\nSource: {SOURCES.get(source, source)} - {note}")
     print(f"\nValidation: {'PASSED' if result['valid'] else 'FAILED'}")
     for r in result["reasons"]:
         print(f"  - {r}")
@@ -156,7 +182,8 @@ def run(plan, source, validation):
     RESULTS_DIR.mkdir(exist_ok=True)
     path = RESULTS_DIR / f"{started.strftime('%Y%m%dT%H%M%SZ')}.json"
     path.write_text(json.dumps({
-        "plan": plan, "plan_source": source, "validation": validation,
+        "plan": {k: v for k, v in plan.items() if k != "ranking"}, "plan_source": source,
+        "ranking": plan.get("ranking"), "validation": validation,
         "started_at": started.isoformat(timespec="seconds"),
         "baseline": {"captured_at": baseline["captured_at"], "flags_enabled": baseline["flags_enabled"]},
         "forced_abort_test": FORCE_ABORT_TEST, "guard": g, "rollback_verified": rolled_back,

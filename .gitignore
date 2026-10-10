@@ -2,3 +2,6 @@
 __pycache__/
 approved_experiment.json
 active_experiment.json
+agent_log.jsonl
+.venv/
+rankings/
